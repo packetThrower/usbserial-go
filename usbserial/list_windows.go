@@ -32,11 +32,17 @@ func platformList() ([]Device, error) {
 		if drv == nil {
 			continue
 		}
+		// go.bug.st/serial's PortDetails exposes a single Product
+		// string (typically the vendor driver's friendly name, e.g.
+		// "Silicon Labs CP210x USB to UART Bridge (COM3)") but no
+		// separate Manufacturer. Leave Manufacturer empty on Windows
+		// rather than fabricating it from substring parsing.
 		results = append(results, Device{
 			Chipset:   drv.Name(),
 			VendorID:  uint16(vid),
 			ProductID: uint16(pid),
 			Serial:    p.SerialNumber,
+			Product:   p.Product,
 			Path:      p.Name, // e.g. "COM3"
 			Driver:    drv,
 		})

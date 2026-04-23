@@ -4,6 +4,7 @@ package usbserial
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/gousb"
 )
@@ -43,15 +44,38 @@ func platformList() ([]Device, error) {
 		if drv == nil {
 			continue // can't happen given the filter above, but belt-and-braces
 		}
-		serial, _ := d.SerialNumber() // empty string is fine; some chipsets omit iSerial
+		// String descriptors come off the default control endpoint and
+		// don't need a class driver to read — that's why macOS's ioreg
+		// shows "USB Vendor Name" for a CP210x even without the SiLabs
+		// VCP kext loaded. Any of these can be missing if the device
+		// omitted the descriptor (common on cheap CH340 clones).
+		//
+		// Descriptors are often right-padded to a fixed width. Siemens's
+		// RUGGEDCOM, for instance, NUL-pads its Product string out to 40
+		// chars. macOS's ioreg silently strips the padding; we do the
+		// same so consumers don't have to. trimDescriptor strips both
+		// NULs and ordinary whitespace.
+		serial, _ := d.SerialNumber()
+		manufacturer, _ := d.Manufacturer()
+		product, _ := d.Product()
 		results = append(results, Device{
-			Chipset:   drv.Name(),
-			VendorID:  uint16(desc.Vendor),
-			ProductID: uint16(desc.Product),
-			Serial:    serial,
-			Path:      fmt.Sprintf("usb:bus=%03d:addr=%03d", desc.Bus, desc.Address),
-			Driver:    drv,
+			Chipset:      drv.Name(),
+			VendorID:     uint16(desc.Vendor),
+			ProductID:    uint16(desc.Product),
+			Serial:       trimDescriptor(serial),
+			Manufacturer: trimDescriptor(manufacturer),
+			Product:      trimDescriptor(product),
+			Path:         fmt.Sprintf("usb:bus=%03d:addr=%03d", desc.Bus, desc.Address),
+			Driver:       drv,
 		})
 	}
 	return results, err
+}
+
+// trimDescriptor strips NUL padding and surrounding whitespace from
+// a USB string descriptor. Many vendors right-pad descriptors to a
+// fixed width with NULs or spaces; callers almost always want the
+// cleaned-up form for display.
+func trimDescriptor(s string) string {
+	return strings.Trim(s, " \t\r\n\x00")
 }

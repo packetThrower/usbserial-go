@@ -34,6 +34,16 @@ type Device struct {
 	// burned in at manufacture; CH340 clones often don't.
 	Serial string
 
+	// Manufacturer and Product are the iManufacturer / iProduct
+	// string descriptors, or empty if the device didn't provide them.
+	// These come straight off the USB control endpoint and don't
+	// require a class driver — useful for diagnostics, for nicer
+	// UI labels, and as a fallback when a rebranded VID makes the
+	// chipset identification ambiguous (the manufacturer string on
+	// a Siemens RUGGEDCOM, for example, still reads "Silicon Labs").
+	Manufacturer string
+	Product      string
+
 	// Path is a platform-appropriate identifier for this device:
 	//   - On Linux / macOS, a URI like "usb:bus=001:addr=004" — the
 	//     actual serial port device path only exists once the OS
