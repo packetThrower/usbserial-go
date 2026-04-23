@@ -11,7 +11,8 @@ package cp210x
 
 import "github.com/packetThrower/usbserial-go/usbserial"
 
-// SiLabs vendor ID. All CP210x-family chips share this VID.
+// SiLabs vendor ID. All CP210x-family chips share this VID when they
+// ship under the SiLabs USB-IF allocation.
 const VendorID = 0x10C4
 
 // Known product IDs across the CP210x family. Not exhaustive — the
@@ -27,16 +28,30 @@ var productIDs = map[uint16]string{
 	0xEA80: "CP2110", // HID-to-UART variant
 }
 
+// rebrands: (VID<<16 | PID) for CP210x-based devices that ship under
+// a non-SiLabs USB-IF VID. The chip protocol is still stock CP210x;
+// only the device descriptors are reflashed. Kept separate from
+// productIDs so the standard SiLabs lookup stays fast and explicit.
+//
+// Entries:
+//   - 0x0908:0x01FF — Siemens RUGGEDCOM USB Serial console (RST2228
+//     and similar). Confirmed CP210x by the device's "USB Vendor
+//     Name" = "Silicon Labs" descriptor.
+var rebrands = map[uint32]string{
+	(0x0908 << 16) | 0x01FF: "CP210x (Siemens RUGGEDCOM)",
+}
+
 // Matches implements usbserial.Driver.
 type driver struct{}
 
 func (driver) Name() usbserial.Chipset { return usbserial.ChipsetCP210x }
 
 func (driver) Matches(vid, pid uint16) bool {
-	if vid != VendorID {
-		return false
+	if vid == VendorID {
+		_, ok := productIDs[pid]
+		return ok
 	}
-	_, ok := productIDs[pid]
+	_, ok := rebrands[(uint32(vid)<<16)|uint32(pid)]
 	return ok
 }
 
