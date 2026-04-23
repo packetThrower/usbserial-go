@@ -1,0 +1,16 @@
+# Build artifacts
+/usbserial-list
+cmd/*/usbserial-list
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Temporary
+*.log
+*.tmp
