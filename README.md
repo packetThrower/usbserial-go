@@ -43,14 +43,17 @@ Planned rollout:
 go get github.com/packetThrower/usbserial-go
 ```
 
-**System dependency:** `libusb-1.0`. Only required on Linux and macOS.
+**System dependencies (Linux and macOS only):** `libusb-1.0` at
+runtime, plus `pkg-config` at build time (gousb uses it to locate
+libusb-1.0's headers and libs).
 
-- macOS: `brew install libusb`
-- Debian / Ubuntu: `sudo apt install libusb-1.0-0-dev`
-- Fedora: `sudo dnf install libusb1-devel`
-- Arch: `sudo pacman -S libusb`
+- macOS: `brew install pkg-config libusb`
+- Debian / Ubuntu: `sudo apt install pkg-config libusb-1.0-0-dev`
+- Fedora: `sudo dnf install pkgconf-pkg-config libusb1-devel`
+- Arch: `sudo pacman -S pkgconf libusb`
 
-Windows builds skip libusb entirely (falls through to `go.bug.st/serial`).
+Windows builds skip both entirely — build with `CGO_ENABLED=0`
+(falls through to `go.bug.st/serial`, which is pure Go).
 
 ## Usage
 
