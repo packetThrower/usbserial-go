@@ -17,9 +17,14 @@ a `/dev/tty*` or `COMx` node. Modern OSes cover most of that well:
   `cdc_acm` in mainline. Plug in a stock-VID device and a
   `/dev/ttyUSB*` (or `/dev/ttyACM*`) node appears with no user
   action — tested on Ubuntu 24.04 LTS.
-- **macOS 11+** ships Apple-bundled DEXTs for FTDI
-  (`AppleUSBFTDI`), Prolific (`AppleUSBPLCOM`), and CDC-ACM
-  (`AppleUSBCDCACMData`). Those three work out of the box.
+- **macOS 11+** ships Apple-bundled DEXTs for all four common
+  chipsets: `AppleUSBFTDI`, `AppleUSBPLCOM` (Prolific),
+  `AppleUSBSLCOM` (Silicon Labs CP210x), `AppleUSBCHCOM` (WCH
+  CH340/CH341), plus `AppleUSBCDCACMData` for CDC-ACM. Each of
+  those drivers matches a specific, hard-coded VID:PID table in
+  its Info.plist — so a **stock** CP2102 or CH340G or PL2303HXD
+  just works, but anything not in the table still needs a driver
+  or something like this library.
 - **Windows** needs vendor drivers for everything except CDC-ACM,
   but the install flow is well-trodden and the vendor's own
   installer handles it.
@@ -27,19 +32,33 @@ a `/dev/tty*` or `COMx` node. Modern OSes cover most of that well:
 This library isn't trying to replace any of that. It's for the
 cases that fall through the cracks:
 
-1. **CP210x on macOS** — Apple doesn't ship a driver. Users
-   currently have to install Silicon Labs's VCP kext / DEXT.
-2. **WCH CH340/CH341 on macOS** — same story; no Apple driver.
-   Every no-name USB-serial cable and ESP32 dev board uses this
-   chip, so it comes up a lot.
-3. **Vendor-rebranded VIDs on any OS** — a common chipset reflashed
-   with some vendor's own USB-IF VID so the kernel/OS driver's
-   id_table doesn't match. Example: Siemens's RUGGEDCOM USB Serial
-   console is a Silicon Labs CP210x burned with Siemens VID
-   `0x0908:0x01FF`. Linux's `cp210x` doesn't list that pair, so
-   no `/dev/ttyUSB*` appears without a manual
-   `echo 0908 01ff | sudo tee /sys/bus/usb-serial/drivers/cp210x/new_id`;
-   macOS has no driver at all for that protocol.
+1. **Vendor-rebranded VIDs on any OS** — a common chipset reflashed
+   with some vendor's own USB-IF VID so the OS driver's id_table
+   doesn't match. Example: Siemens's RUGGEDCOM USB Serial console
+   is a Silicon Labs CP210x burned with Siemens VID
+   `0x0908:0x01FF`. Neither `AppleUSBSLCOM` nor Linux's `cp210x`
+   list that pair, so no `/dev/cu.*` / `/dev/ttyUSB*` appears
+   (on Linux, a manual
+   `echo 0908 01ff | sudo tee /sys/bus/usb-serial/drivers/cp210x/new_id`
+   works; on macOS, nothing short of a third-party driver did
+   before this library). The same pattern shows up across a lot
+   of industrial and instrument gear.
+2. **Less-common PIDs under a stock VID** that the OS id_table
+   happens to miss — CP2108 quad-UART (`10c4:ea71`) is a common
+   example; `AppleUSBSLCOM` lists only the CP2102/CP2105 pairs.
+3. **Legacy PL2303HXA cables on macOS** that Apple's
+   `AppleUSBPLCOM` deliberately excludes (the "counterfeit"
+   situation — Apple and Prolific's current driver both refuse to
+   bind to the oldest chip revisions).
+
+On **older macOS versions** (before the Apple-bundled DEXTs
+existed), this library also covers the stock-VID case — but the
+intended user base is all on macOS 11+, so that's a side effect
+rather than the motivation.
+
+On **Linux**, vendor rebrands and atypical PIDs are also the
+primary gap — the kernel modules themselves are fine for stock
+hardware.
 
 For those cases, usbserial-go opens the device via libusb, runs
 the chipset's USB control-request protocol (baud, framing, flow,
@@ -59,22 +78,24 @@ Implemented and tested against real hardware:
 
 Planned:
 
-- **CH340/CH341 (WCH)** — next up, because it's the second chipset
-  with no macOS driver. High practical value.
-- **FTDI** — mostly for API parity; FTDI already works driverless
-  on both Linux and macOS.
-- **PL2303 (Prolific)** — also for parity; also already works
-  driverless on Linux and on macOS 11+. Deferred partly because
-  of Prolific's counterfeit-detection history, which makes
-  descriptor-based matching messy. See
-  [pl2303/README.md](pl2303/README.md).
+- **CH340/CH341 (WCH)** — next up. `AppleUSBCHCOM` covers only
+  two PIDs (`1a86:7523` and `1a86:55d4`); anything else under the
+  WCH VID — or any WCH chip burned under another vendor's VID —
+  falls through to this library.
+- **FTDI** — mostly for API parity. `AppleUSBFTDI` has a 97-entry
+  id_table that covers most FTDI devices and rebrands, so the
+  motivation here is uniformity rather than a meaningful gap.
+- **PL2303 (Prolific)** — also for parity. `AppleUSBPLCOM` covers
+  the common PL2303 chip revisions but deliberately excludes the
+  legacy HXA parts, which are the only remaining real macOS gap
+  for Prolific. See [pl2303/README.md](pl2303/README.md).
 
 ## Platform support
 
 | Platform | Transport | Notes |
 |---|---|---|
 | **Linux** | libusb (via gousb). `SetAutoDetach(true)` unbinds the in-kernel `cp210x` / `ftdi_sio` / etc. module on claim and re-binds on release. | Requires libusb access for the user — udev rule for the target VID/PID, or membership in `plugdev`/`dialout`. |
-| **macOS** | libusb (via gousb). `SetAutoDetach` is skipped here. | No entitlements needed for devices without an Apple-bundled driver (CP210x, CH340/CH341). Devices already claimed by an Apple DEXT (FTDI, Prolific, CDC-ACM) can't be detached without a DriverKit entitlement we don't have — Apple's driver is doing the right thing for those and you should use it. |
+| **macOS** | libusb (via gousb). `SetAutoDetach` is skipped here. | No entitlements needed for devices whose VID:PID isn't claimed by any Apple DEXT (vendor rebrands, less-common PIDs). Devices already claimed by `AppleUSBSLCOM` / `AppleUSBCHCOM` / `AppleUSBPLCOM` / `AppleUSBFTDI` can't be detached without a DriverKit entitlement — for those, Apple's driver is doing the right thing and you should use it via the normal `/dev/cu.*` path. |
 | **Windows** | `go.bug.st/serial`. | Vendor driver installed as usual. This library is a thin API wrapper on Windows. |
 
 ## Installation
