@@ -1,41 +1,81 @@
 # usbserial-go
 
-A Go library for talking to USB-to-serial adapters directly from
-userspace, bypassing chipset-specific kernel drivers on Linux and
-macOS. Windows falls back to the OS's existing vendor driver via
-`go.bug.st/serial` (Windows requires kernel-mode drivers for USB
-devices, no reasonable userspace alternative exists without shipping
-a signed driver).
+A Go library for USB-to-serial adapters. Opens devices directly
+through libusb on Linux and macOS by implementing the chipset's
+own USB protocol in Go; falls through to `go.bug.st/serial` on
+Windows. One `Port` interface, same code path per platform.
 
-The motivation: on Linux and macOS, SiLabs / FTDI / Prolific / WCH
-chipsets each ship with their own kernel drivers or kext-era system
-extensions that users have to install, authorize, and sometimes
-troubleshoot. libusb can talk to any of these chips directly by
-implementing their documented USB control-request protocols, which
-means an app can open a serial adapter with zero driver install. This
-library aims to provide that for the common chipsets, exposed through
-a single unified API.
+## What it's actually for
+
+USB-to-serial bridges (Silicon Labs CP210x, Prolific PL2303, WCH
+CH340/CH341, FTDI FT232/FT2232) each speak a different
+vendor-specific USB protocol. The normal path is that the OS's own
+driver recognises the device's VID:PID, attaches to it, and exposes
+a `/dev/tty*` or `COMx` node. Modern OSes cover most of that well:
+
+- **Linux** ships `cp210x`, `ftdi_sio`, `pl2303`, `ch341`, and
+  `cdc_acm` in mainline. Plug in a stock-VID device and a
+  `/dev/ttyUSB*` (or `/dev/ttyACM*`) node appears with no user
+  action — tested on Ubuntu 24.04 LTS.
+- **macOS 11+** ships Apple-bundled DEXTs for FTDI
+  (`AppleUSBFTDI`), Prolific (`AppleUSBPLCOM`), and CDC-ACM
+  (`AppleUSBCDCACMData`). Those three work out of the box.
+- **Windows** needs vendor drivers for everything except CDC-ACM,
+  but the install flow is well-trodden and the vendor's own
+  installer handles it.
+
+This library isn't trying to replace any of that. It's for the
+cases that fall through the cracks:
+
+1. **CP210x on macOS** — Apple doesn't ship a driver. Users
+   currently have to install Silicon Labs's VCP kext / DEXT.
+2. **WCH CH340/CH341 on macOS** — same story; no Apple driver.
+   Every no-name USB-serial cable and ESP32 dev board uses this
+   chip, so it comes up a lot.
+3. **Vendor-rebranded VIDs on any OS** — a common chipset reflashed
+   with some vendor's own USB-IF VID so the kernel/OS driver's
+   id_table doesn't match. Example: Siemens's RUGGEDCOM USB Serial
+   console is a Silicon Labs CP210x burned with Siemens VID
+   `0x0908:0x01FF`. Linux's `cp210x` doesn't list that pair, so
+   no `/dev/ttyUSB*` appears without a manual
+   `echo 0908 01ff | sudo tee /sys/bus/usb-serial/drivers/cp210x/new_id`;
+   macOS has no driver at all for that protocol.
+
+For those cases, usbserial-go opens the device via libusb, runs
+the chipset's USB control-request protocol (baud, framing, flow,
+DTR/RTS, break, modem status), and shuttles bytes over the bulk
+IN/OUT endpoints. No driver install, no sysfs dance, no kext
+approval.
 
 ## Status
 
-**Pre-alpha.** Scaffolding only. No chipset protocols implemented yet.
+Implemented and tested against real hardware:
 
-Planned rollout:
+- **CP210x (Silicon Labs)** — open, read, write, baud, framing,
+  flow control (none / RTSCTS / XONXOFF), DTR/RTS, modem status,
+  break. Covers CP2102, CP2102N, CP2104, plus the Siemens RUGGEDCOM
+  rebrand. Multi-UART variants (CP2105 dual, CP2108 quad) enumerate
+  fine but currently only expose the first UART.
 
-- **v0.1.0** — Core `Port` interface, chipset detection / enumeration,
-  CP210x (SiLabs) implementation as the proof-of-concept.
-- **v0.2.0** — CH341 (WCH) — ubiquitous in cheap USB-serial adapters.
-- **v0.3.0** — FTDI (FT232R, FT2232H) — quality adapters and industrial.
-- **v0.4.0** — PL2303 (Prolific). Last because of the counterfeit-
-  detection social landscape; see [pl2303/README.md](pl2303/README.md).
+Planned:
+
+- **CH340/CH341 (WCH)** — next up, because it's the second chipset
+  with no macOS driver. High practical value.
+- **FTDI** — mostly for API parity; FTDI already works driverless
+  on both Linux and macOS.
+- **PL2303 (Prolific)** — also for parity; also already works
+  driverless on Linux and on macOS 11+. Deferred partly because
+  of Prolific's counterfeit-detection history, which makes
+  descriptor-based matching messy. See
+  [pl2303/README.md](pl2303/README.md).
 
 ## Platform support
 
-| Platform | Approach | User prerequisites |
+| Platform | Transport | Notes |
 |---|---|---|
-| **Linux** | Direct libusb. `detach_kernel_driver()` reclaims the device from the in-kernel `cp210x` / `ftdi_sio` / etc. modules. | User in `plugdev` or `dialout` group (distro-dependent), or udev rules for the target VID/PID. |
-| **macOS** | Direct libusb via IOKit. No entitlements required for non-sandboxed apps. | The SiLabs / FTDI kext / system extension must *not* be installed. If already installed, remove it before using this library. |
-| **Windows** | Falls through to `go.bug.st/serial` / native COM-port API. | User installs the chipset vendor's Windows driver as usual (SiLabs VCP, FTDI VCP, etc.). |
+| **Linux** | libusb (via gousb). `SetAutoDetach(true)` unbinds the in-kernel `cp210x` / `ftdi_sio` / etc. module on claim and re-binds on release. | Requires libusb access for the user — udev rule for the target VID/PID, or membership in `plugdev`/`dialout`. |
+| **macOS** | libusb (via gousb). `SetAutoDetach` is skipped here. | No entitlements needed for devices without an Apple-bundled driver (CP210x, CH340/CH341). Devices already claimed by an Apple DEXT (FTDI, Prolific, CDC-ACM) can't be detached without a DriverKit entitlement we don't have — Apple's driver is doing the right thing for those and you should use it. |
+| **Windows** | `go.bug.st/serial`. | Vendor driver installed as usual. This library is a thin API wrapper on Windows. |
 
 ## Installation
 
@@ -43,9 +83,8 @@ Planned rollout:
 go get github.com/packetThrower/usbserial-go
 ```
 
-**System dependencies (Linux and macOS only):** `libusb-1.0` at
-runtime, plus `pkg-config` at build time (gousb uses it to locate
-libusb-1.0's headers and libs).
+Linux and macOS builds need `libusb-1.0` at runtime and `pkg-config`
+at build time (gousb uses it to find libusb's headers and libs):
 
 - macOS: `brew install pkg-config libusb`
 - Debian / Ubuntu: `sudo apt install pkg-config libusb-1.0-0-dev`
@@ -53,16 +92,14 @@ libusb-1.0's headers and libs).
 - Arch: `sudo pacman -S pkgconf libusb`
 
 Windows builds skip both entirely — build with `CGO_ENABLED=0`
-(falls through to `go.bug.st/serial`, which is pure Go).
+(the Windows build path is pure Go via `go.bug.st/serial`).
 
 ## Usage
 
 ```go
 import (
-    "github.com/packetThrower/usbserial-go/usbserial"
-    // Blank-import the chipset subpackages you want to register.
-    // Only the ones you import are linked into the final binary.
     _ "github.com/packetThrower/usbserial-go/cp210x"
+    "github.com/packetThrower/usbserial-go/usbserial"
 )
 
 func main() {
@@ -71,7 +108,9 @@ func main() {
         log.Fatal(err)
     }
     for _, d := range devs {
-        fmt.Printf("%s — %s @ %s\n", d.Chipset, d.Serial, d.Path)
+        fmt.Printf("%s %04x:%04x — %s / %s / serial=%s / %s\n",
+            d.Chipset, d.VendorID, d.ProductID,
+            d.Manufacturer, d.Product, d.Serial, d.Path)
     }
 
     port, err := usbserial.Open(devs[0])
@@ -81,9 +120,13 @@ func main() {
     defer port.Close()
 
     port.SetBaudRate(115200)
-    port.SetFraming(usbserial.Framing{DataBits: 8, StopBits: 1, Parity: usbserial.ParityNone})
+    port.SetFraming(usbserial.Framing{
+        DataBits: 8,
+        StopBits: 1,
+        Parity:   usbserial.ParityNone,
+    })
 
-    // port implements io.ReadWriter
+    // port implements io.ReadWriteCloser.
     fmt.Fprintln(port, "show version")
     buf := make([]byte, 1024)
     n, _ := port.Read(buf)
@@ -91,26 +134,44 @@ func main() {
 }
 ```
 
+Blank-importing a chipset subpackage is how the library's link-time
+registry learns which chipsets to enumerate. Only the subpackages
+you import contribute code to the final binary.
+
+### CLIs in the repo
+
+Two small tools useful for testing an install:
+
+- `go run ./cmd/usbserial-list` — lists every attached device that a
+  registered chipset subpackage claims, with full descriptor info.
+- `go run ./cmd/usbserial-open -baud 115200` — opens the first such
+  device, pipes stdin → device-TX and device-RX → stdout. Ctrl-] quits.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) (TODO).
 
-Chipset additions are welcome. The broad recipe:
+Chipset additions are welcome. The recipe:
 
-1. Read the vendor's USB protocol documentation (datasheet or
-   application note).
-2. For reference, cross-check against the Linux kernel's USB serial
-   drivers: [drivers/usb/serial](https://github.com/torvalds/linux/tree/master/drivers/usb/serial).
-3. Implement the [`usbserial.Port`](usbserial/port.go) interface
-   inside a new subpackage.
-4. Register VID/PID entries in the package's `init()` so
-   `usbserial.List()` picks them up automatically.
-5. Ship a minimal test against real hardware at common baud rates.
+1. Read the vendor's USB protocol documentation — datasheet or
+   application note. SiLabs AN571 is the reference for CP210x;
+   equivalents exist for each other chipset.
+2. Cross-check against the Linux kernel's USB serial drivers at
+   [drivers/usb/serial](https://github.com/torvalds/linux/tree/master/drivers/usb/serial)
+   for tricky details (quirk lists, oddly-behaved chips).
+3. Implement the [`usbserial.Port`](usbserial/port.go) interface in
+   a new subpackage. Use the `cp210x/` subpackage as a reference
+   layout: `ids.go` registers the driver, `port_unix.go` is the
+   libusb implementation, `port_windows.go` is the
+   `go.bug.st/serial` passthrough.
+4. Register VID/PID entries — and any vendor-rebrand entries — so
+   `usbserial.List()` picks up the device automatically.
+5. Ship a test against real hardware at 9600 and 115200 baud.
 
-**Licensing note:** implementations should be written from the
-vendor's public datasheet, not by translating the Linux kernel's
-GPLv2 drivers line-by-line. Clean-room implementations let this
-library stay MIT-licensed and consumable by permissive projects.
+Implementations should be written from the vendor's public
+datasheet, not by translating the Linux kernel's GPLv2 drivers
+line by line. Clean-room implementations keep this library
+MIT-licensed and consumable by permissive projects.
 
 ## License
 
