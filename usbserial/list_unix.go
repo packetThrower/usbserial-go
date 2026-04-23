@@ -4,7 +4,6 @@ package usbserial
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/google/gousb"
 )
@@ -62,20 +61,12 @@ func platformList() ([]Device, error) {
 			Chipset:      drv.Name(),
 			VendorID:     uint16(desc.Vendor),
 			ProductID:    uint16(desc.Product),
-			Serial:       trimDescriptor(serial),
-			Manufacturer: trimDescriptor(manufacturer),
-			Product:      trimDescriptor(product),
+			Serial:       TrimDescriptor(serial),
+			Manufacturer: TrimDescriptor(manufacturer),
+			Product:      TrimDescriptor(product),
 			Path:         fmt.Sprintf("usb:bus=%03d:addr=%03d", desc.Bus, desc.Address),
 			Driver:       drv,
 		})
 	}
 	return results, err
-}
-
-// trimDescriptor strips NUL padding and surrounding whitespace from
-// a USB string descriptor. Many vendors right-pad descriptors to a
-// fixed width with NULs or spaces; callers almost always want the
-// cleaned-up form for display.
-func trimDescriptor(s string) string {
-	return strings.Trim(s, " \t\r\n\x00")
 }

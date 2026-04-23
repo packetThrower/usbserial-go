@@ -56,9 +56,10 @@ func (driver) Matches(vid, pid uint16) bool {
 }
 
 func (driver) Open(d usbserial.Device) (usbserial.Port, error) {
-	// TODO: libusb-backed open on Linux/macOS; Windows falls through
-	// to go.bug.st/serial via a separate build-tagged file.
-	return nil, errUnimplemented
+	// openPort is defined per-platform: libusb-backed on
+	// Linux/macOS (port_unix.go), go.bug.st/serial passthrough on
+	// Windows (port_windows.go).
+	return openPort(d)
 }
 
 func init() {

@@ -2,6 +2,7 @@ package usbserial
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -105,6 +106,18 @@ func Open(d Device) (Port, error) {
 		return nil, fmt.Errorf("usbserial: device has no registered driver")
 	}
 	return d.Driver.Open(d)
+}
+
+// TrimDescriptor strips NUL padding and surrounding whitespace from
+// a USB string descriptor. Many vendors right-pad descriptors to a
+// fixed width with NULs or spaces (the Siemens RUGGEDCOM pads its
+// Product to 40 chars, for example); callers almost always want the
+// cleaned-up form for display or matching. Exported so chipset
+// subpackages can trim freshly-read descriptors the same way when
+// re-opening a device to match against a Device.Serial recorded
+// earlier by List.
+func TrimDescriptor(s string) string {
+	return strings.Trim(s, " \t\r\n\x00")
 }
 
 // lookupDriver returns the first registered driver whose Matches
